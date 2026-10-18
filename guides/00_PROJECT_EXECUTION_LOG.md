@@ -29,6 +29,8 @@ This document records **every single move, command, decision, and verification**
 | **19** | Create Root `README.md` | Provide professional project presentation, architecture badges, folder tree, and quickstart. | Created [`README.md`](file:///e:/HelpWise-AI/README.md) | Formatted markdown with architecture diagram and command guide. |
 | **20** | Create 5 Comprehensive Guides | Author thorough, step-by-step documentation, line-by-line code explanations, and 20 interview Q&As. | Created `guides/01` through `guides/05` | Complete educational materials covering architecture, setup, backend, frontend, and deployment. |
 | **21** | Git Initialization & Initial Commit | Initialize version control and save a pristine baseline commit. | `git init; git add .; git commit -m "..."` | Committed 25 files on branch `master` with clean working tree. |
+| **22** | User Local Browser & Port Collision Audit | User opened `http://127.0.0.1:8000` and `http://localhost:5173` successfully; diagnosed `[WinError 10013]` (occupied port 8000) and `npm ENOENT` (wrong working directory). | Audited terminal logs and screenshots | Confirmed UI connected, 12ms latency, and clarified directory paths. |
+| **23** | Terminate Background Daemons | Safely cancelled background task-48 (uvicorn) and task-52 (vite) so the user has full exclusive ownership of ports 8000 and 5173 in their local PowerShell terminals. | `manage_task(kill, task-48)` and `manage_task(kill, task-52)` | Ports 8000 and 5173 verified free (`netstat` exit code 1). |
 
 ---
 

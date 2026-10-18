@@ -92,3 +92,43 @@ This document contains a complete reference of all prompts, discussions, technic
    - This document! Captures the entire conversation history, prompts, quota analysis, interview tips, and design rationales.
 3. Established the **Action Protocol**:
    - Before executing commands or modifying code, clearly explain what is about to happen, why it is needed, and request confirmation or present multiple-choice choices when selecting solutions.
+
+---
+
+## 📌 Session 3: Visual Verification & Terminal Command Troubleshooting
+
+### 3.1 The User's Question & Screenshots
+**User Prompt**:
+> "this is how frontend and backend looks? i need to run this locally in my terminal"
+> Along with two screenshots:
+> 1. Browser at `http://127.0.0.1:8000`: Displaying `{"message":"Welcome to HelpWise AI — ITSM Helpdesk Backend API",...}`
+> 2. Browser at `http://localhost:5173`: Displaying the HelpWise AI React UI with green "Connected" badge and "HEALTHY" status with 12ms latency.
+
+### 3.2 Technical Breakdown of What You Saw in the Screenshots
+
+#### Screenshot 1: Backend at `http://127.0.0.1:8000`
+- **What it is**: This is the raw JSON response returned by your Python FastAPI backend from `root_endpoint()` in `backend/main.py`.
+- **Why it looks like raw text**: REST APIs are designed for machine-to-machine communication. They do not render HTML buttons or stylesheets; they serve structured JSON data that other programs (like your React frontend) consume.
+
+#### Screenshot 2: Frontend at `http://localhost:5173`
+- **What it is**: This is the React Single-Page Application (SPA) running in your browser.
+- **What happened behind the scenes**:
+  1. The browser executed React code from `frontend/src/App.jsx`.
+  2. The `useEffect` hook ran immediately on mount and triggered `fetch('http://127.0.0.1:8000/health')`.
+  3. The FastAPI backend processed the request, verified CORS headers, and sent back the `HealthResponse` JSON payload.
+  4. React received the data, calculated that the round-trip took **12 milliseconds**, updated the state (`setHealthData`, `setLatency`), and transformed the raw JSON into the green pulsing **Connected** badge, telemetry cards, and roadmap view!
+
+### 3.3 Explaining the Two Terminal Errors Encountered
+
+#### Error 1: `[WinError 10013] An attempt was made to access a socket in a way forbidden by its access permissions`
+- **Why it happened**: In Windows, only **one** process can bind to a specific network port (e.g., port 8000) at a time. Earlier, during automated verification, a background Uvicorn daemon was started on port 8000. When you ran `uvicorn main:app ...` in your PowerShell window, Windows rejected it because port 8000 was already actively listening.
+- **The Solution**: We terminated the background daemon. Now port 8000 is 100% free for your terminal!
+
+#### Error 2: `npm error enoent Could not read package.json: Error: ENOENT: no such file or directory, open 'E:\HelpWise-AI\package.json'`
+- **Why it happened**: `npm run dev` looks for `package.json` in your *current working directory*. Your PowerShell prompt was at `E:\HelpWise-AI` (the root project folder), but our project has a decoupled structure where `package.json` lives inside the `frontend` subdirectory (`E:\HelpWise-AI\frontend`).
+- **The Solution**: Before running `npm run dev`, you must navigate into the frontend folder:
+  ```powershell
+  cd E:\HelpWise-AI\frontend
+  npm run dev
+  ```
+
