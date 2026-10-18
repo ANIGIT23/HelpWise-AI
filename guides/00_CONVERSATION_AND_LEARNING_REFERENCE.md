@@ -132,3 +132,43 @@ This document contains a complete reference of all prompts, discussions, technic
   npm run dev
   ```
 
+---
+
+## 📌 Session 4: Implementing ITSM Ticket Management & MongoDB Atlas Layer
+
+### 4.1 The User's Request
+**User Prompt**:
+> "Continue working on my existing HelpWise AI project. The React frontend and FastAPI backend are already running successfully.  
+> I want to implement the actual ITSM ticket management functionality now. Do not create a new project or replace my existing dashboard. Preserve the current design and working health-check feature.  
+> Implement the following:  
+> 1. Add a 'Create Ticket' form with fields for title, detailed description, category (Hardware, Software, Network, Access, Other), and priority (Low, Medium, High, Critical).  
+> 2. Add a 'Tickets' section that displays submitted tickets, including ticket ID, title, category, priority, status, and creation time.  
+> 3. Implement FastAPI endpoints to create a ticket and retrieve all tickets.  
+> 4. Connect the React frontend to these backend endpoints.  
+> 5. Use MongoDB Atlas for persistent ticket storage if configured. If it is not configured, explain how to configure it. Do not falsely claim that data is saved in MongoDB. A clearly labelled temporary development fallback is acceptable until MongoDB is connected.  
+> 6. Add form validation, loading indicators, and user-friendly error messages.  
+> 7. Keep the existing GET /health endpoint working.  
+> 8. Test the backend endpoints and the frontend ticket submission flow. Fix any errors you encounter.  
+> I am a beginner and need to understand my own project. After implementation, explain:  
+> - Which files you changed.  
+> - How the ticket form communicates with FastAPI.  
+> - How tickets are stored and retrieved.  
+> - How I can test the feature myself."
+
+### 4.2 Key Engineering Patterns Implemented
+
+#### 1. Graceful Degradation & Fallback Architecture
+Instead of hardcoding a requirement for MongoDB credentials that could crash the server if Atlas is unreachable, `backend/database.py` implements a dual-mode engine:
+- Connects to MongoDB Atlas via `motor` if `MONGODB_URI` is present in `backend/.env`.
+- Falls back to an in-memory list with realistic sample tickets (`INC-1001`, `INC-1002`) if unconfigured.
+- Both the API (`"storage_mode": "in_memory_fallback"`) and the frontend UI badge clearly inform the user and reviewer of the active storage engine without any false claims.
+
+#### 2. DTO Separation (Data Transfer Objects)
+`backend/schemas.py` defines:
+- `TicketCreate`: Client-provided input fields (`title`, `description`, `category`, `priority`).
+- `TicketResponse`: Server-persisted entity containing system-managed fields (`id`, `ticket_number`, `status`, `created_at`).
+This enforces security against mass-assignment attacks.
+
+#### 3. Reactive UI with Instant Filter Feedback
+In `frontend/src/App.jsx`, tickets are stored in React state. Filtering by Category or Priority executes client-side on the cached list, providing instantaneous filtering without sending redundant queries to the server.
+

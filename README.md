@@ -73,3 +73,4 @@ Comprehensive documentation has been prepared in the [`guides/`](guides/) folder
 - [03: Backend Deep-Dive & Line-by-Line Code Explanation](guides/03_BACKEND_EXPLAINED.md)
 - [04: Frontend Deep-Dive & Line-by-Line Code Explanation](guides/04_FRONTEND_EXPLAINED.md)
 - [05: Git & Deployment Roadmap](guides/05_GIT_AND_DEPLOYMENT_ROADMAP.md)
+- [06: ITSM Ticket Management & Database Architecture](guides/06_TICKET_MANAGEMENT_AND_DATABASE.md) *(MongoDB Atlas + In-Memory Fallback)*
