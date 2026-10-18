@@ -66,6 +66,8 @@ npm run dev
 ## 📚 Complete Guides & Interview Preparation
 
 Comprehensive documentation has been prepared in the [`guides/`](guides/) folder:
+- [00: Project Execution & Command Journal](guides/00_PROJECT_EXECUTION_LOG.md) *(Audit log of every command & move)*
+- [00: Conversation & Learning Reference](guides/00_CONVERSATION_AND_LEARNING_REFERENCE.md) *(Chat archive, prompts, & Q&A)*
 - [01: Project Overview & Architecture](guides/01_PROJECT_OVERVIEW_AND_ARCHITECTURE.md)
 - [02: Setup & PowerShell Run Tutorial](guides/02_SETUP_AND_RUN_TUTORIAL.md)
 - [03: Backend Deep-Dive & Line-by-Line Code Explanation](guides/03_BACKEND_EXPLAINED.md)
