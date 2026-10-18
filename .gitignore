@@ -1,5 +1,8 @@
 # HelpWise AI Root Git Ignore
 
+# Local Documentation & Study Guides (Keep private on local machine)
+guides/
+
 # Python & Virtual Environments
 __pycache__/
 *.py[cod]
