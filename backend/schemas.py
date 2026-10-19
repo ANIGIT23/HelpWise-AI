@@ -1,6 +1,6 @@
 from datetime import datetime
 from enum import Enum
-from typing import List, Optional
+from typing import List, Optional, Dict
 from pydantic import BaseModel, Field
 
 
@@ -24,6 +24,14 @@ class TicketStatus(str, Enum):
     IN_PROGRESS = "In Progress"
     RESOLVED = "Resolved"
     CLOSED = "Closed"
+
+
+class ActivityLogEntry(BaseModel):
+    """Represents a timestamped action in the incident audit trail."""
+    timestamp: str = Field(..., description="ISO 8601 UTC timestamp")
+    actor: str = Field(default="System", description="User or agent who performed the action")
+    action: str = Field(..., description="Type of event: Created, Status Change, Reassigned, Note")
+    note: str = Field(..., description="Human-readable description of the change")
 
 
 class TicketCreate(BaseModel):
@@ -50,6 +58,26 @@ class TicketCreate(BaseModel):
         ...,
         description="Urgency and business impact of the ticket"
     )
+    assignee: Optional[str] = Field(
+        default="Unassigned",
+        description="Assigned support agent name"
+    )
+    requester: Optional[str] = Field(
+        default="IT Helpdesk User",
+        description="Name or department of the user reporting the incident"
+    )
+
+
+class TicketUpdate(BaseModel):
+    """Schema for updating an existing ticket's lifecycle state or metadata."""
+    title: Optional[str] = Field(None, min_length=3, max_length=150)
+    description: Optional[str] = Field(None, min_length=10, max_length=2000)
+    category: Optional[TicketCategory] = None
+    priority: Optional[TicketPriority] = None
+    status: Optional[TicketStatus] = None
+    assignee: Optional[str] = None
+    resolution_notes: Optional[str] = None
+    updated_by: Optional[str] = "IT Support Agent"
 
 
 class TicketResponse(BaseModel):
@@ -61,8 +89,12 @@ class TicketResponse(BaseModel):
     category: TicketCategory
     priority: TicketPriority
     status: TicketStatus = TicketStatus.OPEN
+    assignee: str = "Unassigned"
+    requester: str = "IT Helpdesk User"
     created_at: str = Field(..., description="ISO 8601 UTC creation timestamp")
     updated_at: str = Field(..., description="ISO 8601 UTC last update timestamp")
+    activity_history: List[ActivityLogEntry] = Field(default_factory=list)
+    resolution_notes: Optional[str] = None
 
 
 class TicketListResponse(BaseModel):
@@ -70,6 +102,31 @@ class TicketListResponse(BaseModel):
     total: int
     tickets: List[TicketResponse]
     storage_mode: str = Field(..., description="Indicates whether MongoDB Atlas or In-Memory fallback is active")
+
+
+class DashboardStatsResponse(BaseModel):
+    """Operational metrics calculated from active incident records."""
+    total: int
+    open: int
+    in_progress: int
+    resolved: int
+    closed: int
+    high_critical: int
+    by_category: Dict[str, int]
+    by_priority: Dict[str, int]
+    by_status: Dict[str, int]
+
+
+class KBArticle(BaseModel):
+    """Demonstration Knowledge Base article schema."""
+    id: str
+    title: str
+    category: str
+    read_time: str
+    excerpt: str
+    content: str
+    tags: List[str]
+    updated_at: str
 
 
 class StorageStatusResponse(BaseModel):

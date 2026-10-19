@@ -1,15 +1,18 @@
 from contextlib import asynccontextmanager
-from datetime import datetime
-from typing import Dict, Any, List
-from fastapi import FastAPI, status, HTTPException
+from datetime import datetime, timezone
+from typing import Dict, Any, List, Optional
+from fastapi import FastAPI, status, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 import database
 from schemas import (
     TicketCreate,
+    TicketUpdate,
     TicketResponse,
     TicketListResponse,
+    DashboardStatsResponse,
+    KBArticle,
     StorageStatusResponse,
 )
 
@@ -18,18 +21,18 @@ from schemas import (
 async def lifespan(app: FastAPI):
     """
     Application lifespan manager.
-    Executes database initialization on startup.
+    Executes database initialization on startup and graceful teardown on shutdown.
     """
     await database.init_db()
     yield
-    # Cleanup logic (if any) executes on shutdown
+    await database.close_db()
 
 
 # Initialize FastAPI application
 app = FastAPI(
     title="HelpWise AI — ITSM Helpdesk Backend",
     description="Core REST API service for HelpWise AI ITSM Helpdesk application",
-    version="1.0.0",
+    version="1.1.0",
     lifespan=lifespan,
 )
 
@@ -74,6 +77,8 @@ def root_endpoint() -> Dict[str, Any]:
         "docs_url": "/docs",
         "health_check": "/health",
         "tickets_api": "/api/tickets",
+        "stats_api": "/api/stats",
+        "kb_api": "/api/kb",
         "status": "operational"
     }
 
@@ -95,8 +100,8 @@ async def health_check() -> HealthResponse:
     return HealthResponse(
         status="healthy",
         app="HelpWise AI — ITSM Helpdesk",
-        version="1.0.0",
-        timestamp=datetime.utcnow().isoformat() + "Z",
+        version="1.1.0",
+        timestamp=datetime.now(timezone.utc).isoformat(),
         environment="development",
         storage_mode=storage.mode,
         database_connected=storage.connected,
@@ -115,6 +120,61 @@ async def get_storage_status() -> StorageStatusResponse:
     return await database.get_storage_status()
 
 
+@app.get(
+    "/api/stats",
+    response_model=DashboardStatsResponse,
+    tags=["Dashboard"],
+    summary="Get Operational Dashboard Statistics",
+    description="Calculates real-time incident metrics, status breakdown, category distribution, and priority counts."
+)
+async def get_stats_endpoint() -> DashboardStatsResponse:
+    """Returns operational KPIs calculated from live incident records."""
+    return await database.get_dashboard_stats()
+
+
+@app.get(
+    "/api/tickets",
+    response_model=TicketListResponse,
+    status_code=status.HTTP_200_OK,
+    tags=["Tickets"],
+    summary="Retrieve all ITSM Tickets",
+    description="Returns submitted incident tickets with optional search and filter criteria."
+)
+async def list_tickets_endpoint(
+    search: Optional[str] = Query(None, description="Search keyword in ticket ID, title, or description"),
+    category: Optional[str] = Query(None, description="Filter by Category"),
+    priority: Optional[str] = Query(None, description="Filter by Priority"),
+    status_filter: Optional[str] = Query(None, alias="status", description="Filter by Status"),
+    assignee: Optional[str] = Query(None, description="Filter by Assignee"),
+) -> TicketListResponse:
+    """Fetches tickets with optional filters from MongoDB Atlas or in-memory fallback."""
+    try:
+        srch = search if isinstance(search, str) else None
+        cat = category if isinstance(category, str) else None
+        prio = priority if isinstance(priority, str) else None
+        st = status_filter if isinstance(status_filter, str) else None
+        asg = assignee if isinstance(assignee, str) else None
+
+        tickets = await database.get_all_tickets(
+            search=srch,
+            category=cat,
+            priority=prio,
+            status=st,
+            assignee=asg,
+        )
+        storage = await database.get_storage_status()
+        return TicketListResponse(
+            total=len(tickets),
+            tickets=tickets,
+            storage_mode=storage.mode,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to retrieve tickets: {database._sanitize_error_message(exc)}"
+        )
+
+
 @app.post(
     "/api/tickets",
     response_model=TicketResponse,
@@ -131,30 +191,58 @@ async def create_ticket_endpoint(payload: TicketCreate) -> TicketResponse:
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to create ticket: {str(exc)}"
+            detail=f"Failed to create ticket: {database._sanitize_error_message(exc)}"
         )
 
 
 @app.get(
-    "/api/tickets",
-    response_model=TicketListResponse,
-    status_code=status.HTTP_200_OK,
+    "/api/tickets/{ticket_id}",
+    response_model=TicketResponse,
     tags=["Tickets"],
-    summary="Retrieve all ITSM Tickets",
-    description="Returns all submitted incident tickets sorted with newest first."
+    summary="Get Incident Details by ID",
+    description="Retrieves a single incident by its ID or ticket number (e.g. INC-1001)."
 )
-async def list_tickets_endpoint() -> TicketListResponse:
-    """Fetches all tickets from MongoDB Atlas or in-memory fallback."""
-    try:
-        tickets = await database.get_all_tickets()
-        storage = await database.get_storage_status()
-        return TicketListResponse(
-            total=len(tickets),
-            tickets=tickets,
-            storage_mode=storage.mode,
-        )
-    except Exception as exc:
+async def get_ticket_endpoint(ticket_id: str) -> TicketResponse:
+    """Retrieves full ticket details including activity history."""
+    ticket = await database.get_ticket_by_id(ticket_id)
+    if not ticket:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to retrieve tickets: {str(exc)}"
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Incident '{ticket_id}' was not found in the database."
         )
+    return ticket
+
+
+@app.patch(
+    "/api/tickets/{ticket_id}",
+    response_model=TicketResponse,
+    tags=["Tickets"],
+    summary="Update Incident Status or Details",
+    description="Updates ticket status, priority, assignee, or resolution notes, recording an activity log."
+)
+async def update_ticket_endpoint(ticket_id: str, payload: TicketUpdate) -> TicketResponse:
+    """Updates incident fields and records lifecycle transition event in audit trail."""
+    updated = await database.update_ticket(ticket_id, payload)
+    if not updated:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Incident '{ticket_id}' was not found to update."
+        )
+    return updated
+
+
+@app.get(
+    "/api/kb",
+    response_model=List[KBArticle],
+    tags=["Knowledge Base"],
+    summary="List Knowledge Base Articles",
+    description="Retrieves searchable demonstration IT troubleshooting articles."
+)
+async def list_kb_endpoint(
+    search: Optional[str] = Query(None, description="Search keyword in title, content, or tags"),
+    category: Optional[str] = Query(None, description="Filter by Category"),
+) -> List[KBArticle]:
+    """Returns demonstration Knowledge Base articles."""
+    srch = search if isinstance(search, str) else None
+    cat = category if isinstance(category, str) else None
+    return await database.get_kb_articles(search=srch, category=cat)
