@@ -30,6 +30,10 @@ function App() {
   const [kbArticles, setKbArticles] = useState([]);
   const [kbLoading, setKbLoading] = useState(false);
   const [selectedArticle, setSelectedArticle] = useState(null);
+  const [kbQuestion, setKbQuestion] = useState('');
+  const [kbAskLoading, setKbAskLoading] = useState(false);
+  const [kbAskError, setKbAskError] = useState(null);
+  const [kbAskResult, setKbAskResult] = useState(null);
 
   // Filters & Search
   const [searchQuery, setSearchQuery] = useState('');
@@ -134,6 +138,35 @@ function App() {
       }
     } catch (e) {
       console.warn('Stats fetch failed:', e);
+    }
+  };
+
+  const handleAskKnowledgeBase = async (e) => {
+    e.preventDefault();
+    const question = kbQuestion.trim();
+    if (question.length < 3) {
+      setKbAskError('Enter at least 3 characters describing the IT issue.');
+      return;
+    }
+    setKbAskError(null);
+    setKbAskLoading(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/kb/ask`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question }),
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || `Server returned error ${res.status}`);
+      }
+      const data = await res.json();
+      setKbAskResult(data);
+    } catch (err) {
+      setKbAskResult(null);
+      setKbAskError(err.message || 'Knowledge search failed.');
+    } finally {
+      setKbAskLoading(false);
     }
   };
 
@@ -981,24 +1014,191 @@ function App() {
              ==================================================================== */}
           {activeTab === 'kb' && (
             <div>
-              <div className="surface-card" style={{ marginBottom: '1.5rem' }}>
-                <div style={{ maxWidth: '600px' }}>
-                  <h2 style={{ fontSize: '1.25rem', fontWeight: 700, marginBottom: '0.4rem' }}>
-                    IT Service Knowledge Base
-                  </h2>
-                  <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginBottom: '1rem' }}>
-                    Standard operating procedures, incident resolution guides, and self-service documentation.
-                  </p>
-                  <div className="topbar-search-box" style={{ width: '100%' }}>
-                    <span className="search-icon-pos">🔍</span>
-                    <input
-                      type="text"
-                      className="topbar-search-input"
-                      placeholder="Search troubleshooting guides by keyword, tool, or error code..."
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                    />
+              <div className="surface-card" style={{ marginBottom: '1.5rem', padding: '1.5rem' }}>
+                <h2 style={{ fontSize: '1.25rem', fontWeight: 700, marginBottom: '0.4rem' }}>
+                  IT Service Knowledge Base
+                </h2>
+                <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginBottom: '1.25rem', maxWidth: '52rem' }}>
+                  Ask a question in everyday words. We look up a how-to article and explain the steps.
+                </p>
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+                    gap: '1.5rem',
+                    alignItems: 'start',
+                  }}
+                >
+                  <div>
+                    <div className="topbar-search-box" style={{ width: '100%', marginBottom: '1rem' }}>
+                      <span className="search-icon-pos">🔍</span>
+                      <input
+                        type="text"
+                        className="topbar-search-input"
+                        placeholder="Filter articles by keyword..."
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                      />
+                    </div>
+                    <form onSubmit={handleAskKnowledgeBase}>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', marginBottom: '0.75rem' }}>
+                        {[
+                          "I can't connect to office Wi-Fi",
+                          'Outlook keeps crashing',
+                          "I lost my phone and can't log in",
+                          'Need a PyCharm license',
+                          'VPN certificate error from home',
+                        ].map((example) => (
+                          <button
+                            type="button"
+                            key={example}
+                            className="btn-secondary"
+                            style={{ fontSize: '0.7rem' }}
+                            onClick={() => setKbQuestion(example)}
+                          >
+                            {example}
+                          </button>
+                        ))}
+                      </div>
+                      <textarea
+                        className="topbar-search-input"
+                        style={{ width: '100%', minHeight: '96px', padding: '0.85rem', resize: 'vertical' }}
+                        placeholder="Example: I cannot connect to office Wi-Fi..."
+                        value={kbQuestion}
+                        onChange={(e) => setKbQuestion(e.target.value)}
+                      />
+                      <button type="submit" className="btn-primary" style={{ marginTop: '0.75rem' }} disabled={kbAskLoading}>
+                        {kbAskLoading ? 'Looking up articles…' : 'Ask knowledge base'}
+                      </button>
+                    </form>
+                    {kbAskError && (
+                      <p style={{ color: '#e11d48', fontSize: '0.85rem', marginTop: '0.75rem' }}>{kbAskError}</p>
+                    )}
                   </div>
+                  {kbAskResult && (
+                    <div
+                      style={{
+                        padding: '1.35rem 1.5rem',
+                        backgroundColor: 'var(--bg-surface-alt)',
+                        borderRadius: 'var(--radius-md)',
+                        border: '1px solid var(--border)',
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.85rem' }}>
+                        <h3 style={{ fontSize: '1.05rem', fontWeight: 700, margin: 0 }}>
+                          Knowledge Base Answer
+                        </h3>
+                        {kbAskResult.matched_articles?.length > 0 ? (
+                          <span
+                            style={{
+                              fontSize: '0.75rem',
+                              fontWeight: 600,
+                              padding: '0.2rem 0.6rem',
+                              borderRadius: '9999px',
+                              backgroundColor: 'rgba(37, 99, 235, 0.1)',
+                              color: 'var(--primary)',
+                            }}
+                          >
+                            ✓ Verified Article Guidance
+                          </span>
+                        ) : (
+                          <span
+                            style={{
+                              fontSize: '0.75rem',
+                              fontWeight: 600,
+                              padding: '0.2rem 0.6rem',
+                              borderRadius: '9999px',
+                              backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                              color: '#ef4444',
+                            }}
+                          >
+                            Support Ticket Recommended
+                          </span>
+                        )}
+                      </div>
+
+                      <p style={{ fontSize: '0.95rem', whiteSpace: 'pre-wrap', lineHeight: 1.65, margin: 0, color: 'var(--text)' }}>
+                        {kbAskResult.answer}
+                      </p>
+
+                      {kbAskResult.matched_articles?.length > 0 ? (
+                        <div
+                          style={{
+                            marginTop: '1.25rem',
+                            paddingTop: '0.85rem',
+                            borderTop: '1px solid var(--border)',
+                            display: 'flex',
+                            flexWrap: 'wrap',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            gap: '0.75rem',
+                          }}
+                        >
+                          <div style={{ fontSize: '0.825rem', color: 'var(--text-muted)' }}>
+                            Source:{' '}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const hit = kbAskResult.matched_articles[0];
+                                const match = kbArticles.find((art) => art.id === hit.id) || hit;
+                                setSelectedArticle(match);
+                              }}
+                              style={{
+                                background: 'none',
+                                border: 'none',
+                                padding: 0,
+                                color: 'var(--primary)',
+                                cursor: 'pointer',
+                                textDecoration: 'underline',
+                                fontWeight: 600,
+                                fontSize: '0.825rem',
+                              }}
+                            >
+                              📖 {kbAskResult.matched_articles[0].title} ({kbAskResult.matched_articles[0].category})
+                            </button>
+                          </div>
+                          <button
+                            type="button"
+                            className="btn-secondary"
+                            style={{ fontSize: '0.75rem', padding: '0.3rem 0.65rem' }}
+                            onClick={() => {
+                              const q = (kbAskResult.question || kbQuestion || '').trim();
+                              setCreateTitle(q.length >= 3 ? q.slice(0, 150) : 'Assistance with IT issue');
+                              setCreateDescription(
+                                q.length >= 10
+                                  ? `User asked: ${q}\n\nReferenced KB Article: ${kbAskResult.matched_articles[0].title} (${kbAskResult.matched_articles[0].id})\nIssue persists after reviewing article steps.`
+                                  : 'Follow-up ticket generated from Knowledge Base.'
+                              );
+                              setCreateCategory(kbAskResult.matched_articles[0].category || 'Other');
+                              setShowCreateModal(true);
+                            }}
+                          >
+                            Still need help? Open Ticket →
+                          </button>
+                        </div>
+                      ) : (
+                        <div style={{ marginTop: '1.25rem', paddingTop: '0.85rem', borderTop: '1px solid var(--border)' }}>
+                          <button
+                            type="button"
+                            className="btn-primary"
+                            onClick={() => {
+                              const q = (kbAskResult.question || kbQuestion || '').trim();
+                              setCreateTitle(q.length >= 3 ? q.slice(0, 150) : 'IT support request');
+                              setCreateDescription(
+                                q.length >= 10
+                                  ? `${q}\n\nSubmitted from the Knowledge Base assistant after no matching troubleshooting article was found.`
+                                  : 'IT support request submitted from Knowledge Base assistant.'
+                              );
+                              setCreateCategory('Other');
+                              setShowCreateModal(true);
+                            }}
+                          >
+                            🎫 Create an Incident Ticket
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -1180,6 +1380,20 @@ function App() {
                       <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>Active Storage Engine</span>
                       <span className="category-tag">{storageStatus?.mode || 'in_memory_fallback'}</span>
                     </div>
+                    {kbAskResult && (
+                      <>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.6rem 0', borderTop: '1px solid var(--border)' }}>
+                          <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>KB retrieval</span>
+                          <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem' }}>{kbAskResult.retrieval_method}</span>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', padding: '0.6rem 0' }}>
+                          <span style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>KB generator</span>
+                          <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.75rem' }}>
+                            {kbAskResult.generation_mode} / llm={String(kbAskResult.llm_used)} / {kbAskResult.vector_database}
+                          </span>
+                        </div>
+                      </>
+                    )}
                   </div>
                 </div>
 

@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 import database
+import rag
 from schemas import (
     TicketCreate,
     TicketUpdate,
@@ -13,6 +14,8 @@ from schemas import (
     TicketListResponse,
     DashboardStatsResponse,
     KBArticle,
+    KBAskRequest,
+    KBAskResponse,
     StorageStatusResponse,
 )
 
@@ -79,6 +82,7 @@ def root_endpoint() -> Dict[str, Any]:
         "tickets_api": "/api/tickets",
         "stats_api": "/api/stats",
         "kb_api": "/api/kb",
+        "kb_ask_api": "/api/kb/ask",
         "status": "operational"
     }
 
@@ -246,3 +250,25 @@ async def list_kb_endpoint(
     srch = search if isinstance(search, str) else None
     cat = category if isinstance(category, str) else None
     return await database.get_kb_articles(search=srch, category=cat)
+
+
+@app.post(
+    "/api/kb/ask",
+    response_model=KBAskResponse,
+    tags=["Knowledge Base"],
+    summary="Ask a question against knowledge-base articles",
+    description=(
+        "Retrieves existing KB articles with MiniLM embeddings in ChromaDB "
+        "(falls back to TF-IDF if embeddings cannot load). Answers are copied from articles; no generative LLM."
+    ),
+)
+async def ask_kb_endpoint(payload: KBAskRequest) -> KBAskResponse:
+    """Retrieve matching articles, then compose a labelled fallback answer from them."""
+    try:
+        articles = await database.get_kb_articles()
+        return rag.answer_question(payload.question, articles)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to search knowledge base: {database._sanitize_error_message(exc)}",
+        )

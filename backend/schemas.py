@@ -129,6 +129,34 @@ class KBArticle(BaseModel):
     updated_at: str
 
 
+class KBAskRequest(BaseModel):
+    """User question against the existing IT knowledge base."""
+    question: str = Field(..., min_length=3, max_length=500, description="IT support question")
+
+
+class KBAskHit(BaseModel):
+    """One ranked knowledge-base article used as retrieval context."""
+    id: str
+    title: str
+    category: str
+    excerpt: str
+    content: str
+    tags: List[str]
+    score: float
+
+
+class KBAskResponse(BaseModel):
+    """Retrieve-then-compose response. llm_used is always false until an LLM is wired."""
+    question: str
+    answer: str
+    matched_articles: List[KBAskHit]
+    retrieval_method: str
+    generation_mode: str
+    llm_used: bool
+    vector_database: str
+    disclaimer: str
+
+
 class StorageStatusResponse(BaseModel):
     """Schema describing current database connection status."""
     connected: bool
