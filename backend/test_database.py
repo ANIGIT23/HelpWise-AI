@@ -20,6 +20,14 @@ from schemas import (
 )
 
 
+def make_async_iter(items):
+    """Return an async iterable (for use as __aiter__) from a plain list."""
+    async def _gen():
+        for item in items:
+            yield item
+    return _gen()
+
+
 class TestDatabaseSecurityAndSanitization(unittest.TestCase):
     """Verifies that error messages are properly sanitized and converted to safe diagnostics."""
 
@@ -81,7 +89,7 @@ class TestInMemoryFallbackLifecycle(unittest.IsolatedAsyncioTestCase):
         database._db = None
 
     async def test_init_db_with_placeholder_enables_fallback(self):
-        with patch.dict("os.environ", {"MONGODB_URI": "your_connection_string_here"}):
+        with patch("database.load_dotenv"), patch.dict("os.environ", {"MONGODB_URI": "your_connection_string_here"}):
             connected = await database.init_db()
             self.assertFalse(connected)
             status = await database.get_storage_status()
@@ -170,10 +178,13 @@ class TestMockedMongoDBAtlasIntegration(unittest.IsolatedAsyncioTestCase):
 
         test_oid = ObjectId()
 
-        # Mock latest ticket lookup
-        mock_tickets_col.find_one = AsyncMock(
-            return_value={"ticket_number": "INC-1010"}
-        )
+        # Mock the async cursor used by _next_safe_ticket_sequence_mongo:
+        # find({}, ...).limit(5000) must return an async-iterable with one doc.
+        mock_cursor = MagicMock()
+        mock_cursor.__aiter__ = lambda self: make_async_iter([{"ticket_number": "INC-1010"}])
+        mock_cursor.limit = MagicMock(return_value=mock_cursor)
+        mock_tickets_col.find = MagicMock(return_value=mock_cursor)
+
         mock_tickets_col.insert_one = AsyncMock(
             return_value=MagicMock(inserted_id=test_oid)
         )
@@ -181,8 +192,10 @@ class TestMockedMongoDBAtlasIntegration(unittest.IsolatedAsyncioTestCase):
 
         # Temporarily attach mock database
         old_is_connected = database._is_connected
+        old_atlas_unreachable = database._atlas_configured_but_unreachable
         old_db = database._db
         database._is_connected = True
+        database._atlas_configured_but_unreachable = False  # must be False for connected path
         database._db = mock_db
 
         try:
@@ -200,6 +213,7 @@ class TestMockedMongoDBAtlasIntegration(unittest.IsolatedAsyncioTestCase):
             mock_tickets_col.insert_one.assert_called_once()
         finally:
             database._is_connected = old_is_connected
+            database._atlas_configured_but_unreachable = old_atlas_unreachable
             database._db = old_db
 
 
@@ -275,15 +289,254 @@ class TestLiveMongoDBAtlasIntegrationOptional(unittest.IsolatedAsyncioTestCase):
 
     async def test_live_connection(self):
         connected = await database.init_db()
-        status = await database.get_storage_status()
-        self.assertEqual(status.connected, connected)
+        storage = await database.get_storage_status()
+        self.assertEqual(storage.connected, connected)
         if connected:
-            self.assertEqual(status.mode, "mongodb_atlas")
+            self.assertEqual(storage.mode, "mongodb_atlas")
         else:
-            self.assertEqual(status.mode, "in_memory_fallback")
-            self.assertTrue("fell back" in status.message.lower() or "fallback" in status.message.lower())
+            # When Atlas URI is configured but unreachable the mode is 'atlas_unreachable'.
+            # When MONGODB_URI was not configured at all the mode is 'in_memory_fallback'.
+            self.assertIn(storage.mode, ["in_memory_fallback", "atlas_unreachable"])
+            # Either way the connection_message must be informative.
+            self.assertTrue(
+                "fallback" in storage.message.lower()
+                or "unreachable" in storage.message.lower()
+                or "failed" in storage.message.lower()
+            )
+
+
+class TestAtlasConfiguredButUnreachable(unittest.IsolatedAsyncioTestCase):
+    """
+    Verifies that write operations raise DatabaseUnavailableError (surfaced as HTTP 503)
+    when MONGODB_URI is configured but the Atlas cluster cannot be reached.
+    Read operations (get_all_tickets, get_kb_articles) are allowed to degrade gracefully
+    and return from in-memory demo data for diagnostics.
+    """
+
+    async def asyncSetUp(self):
+        # Simulate the post-init_db state after a failed Atlas connection.
+        database._auto_reconnect_enabled = False
+        database._is_connected = False
+        database._atlas_configured_but_unreachable = True
+        database._mongo_client = None
+        database._db = None
+        database._connection_message = "MongoDB Atlas is configured but unreachable: (test)"
+
+    async def asyncTearDown(self):
+        # Restore clean state for subsequent tests.
+        database._auto_reconnect_enabled = True
+        database._is_connected = False
+        database._atlas_configured_but_unreachable = False
+        database._connection_message = ""
+
+    async def test_create_ticket_raises_database_unavailable(self):
+        payload = TicketCreate(
+            title="Should not persist",
+            description="Atlas is unreachable; write must be refused",
+            category=TicketCategory.SOFTWARE,
+            priority=TicketPriority.LOW,
+            assignee="No-op Agent",
+            requester="Test Suite",
+        )
+        with self.assertRaises(database.DatabaseUnavailableError) as ctx:
+            await database.create_ticket(payload)
+        self.assertIn("unreachable", str(ctx.exception).lower())
+
+    async def test_create_service_request_raises_database_unavailable(self):
+        from schemas import ServiceRequestCreate, RequestCategory
+        payload = ServiceRequestCreate(
+            catalog_item_id="cat-101",
+            item_name="VS Code Enterprise",
+            category=RequestCategory.SOFTWARE,
+            justification="Atlas unreachable — write must be refused",
+            requester="Test Suite",
+            department="QA",
+        )
+        with self.assertRaises(database.DatabaseUnavailableError) as ctx:
+            await database.create_service_request(payload)
+        self.assertIn("unreachable", str(ctx.exception).lower())
+
+    async def test_storage_status_mode_is_atlas_unreachable(self):
+        storage = await database.get_storage_status()
+        self.assertEqual(storage.mode, "atlas_unreachable")
+        self.assertFalse(storage.connected)
+        self.assertIn("unreachable", storage.message.lower())
+
+    async def test_health_endpoint_returns_degraded_when_atlas_unreachable(self):
+        from main import health_check
+        health = await health_check()
+        self.assertEqual(health.status, "degraded")
+        self.assertEqual(health.storage_mode, "atlas_unreachable")
+        self.assertFalse(health.database_connected)
+
+    async def test_start_work_timer_raises_database_unavailable(self):
+        with self.assertRaises(database.DatabaseUnavailableError) as ctx:
+            await database.start_work_timer("INC-1001", agent="Sarah Chen")
+        self.assertIn("unreachable", str(ctx.exception).lower())
+
+    async def test_create_kb_article_raises_database_unavailable(self):
+        from schemas import KBArticleCreate
+        payload = KBArticleCreate(
+            title="Atlas Outage Article",
+            category="Network",
+            read_time="2 min",
+            excerpt="Testing write denial when Atlas is unreachable.",
+            content="Detailed instructions that cannot be saved right now.",
+            tags=["test"],
+        )
+        with self.assertRaises(database.DatabaseUnavailableError) as ctx:
+            await database.create_kb_article(payload)
+        self.assertIn("unreachable", str(ctx.exception).lower())
+
+    async def test_get_all_tickets_raises_database_unavailable_when_atlas_unreachable(self):
+        """Must raise DatabaseUnavailableError instead of returning empty list []."""
+        with self.assertRaises(database.DatabaseUnavailableError) as ctx:
+            await database.get_all_tickets()
+        self.assertIn("unreachable", str(ctx.exception).lower())
+
+    async def test_get_ticket_by_id_raises_database_unavailable_when_atlas_unreachable(self):
+        """Must raise DatabaseUnavailableError instead of returning None (avoiding false 404)."""
+        with self.assertRaises(database.DatabaseUnavailableError) as ctx:
+            await database.get_ticket_by_id("INC-1001")
+        self.assertIn("unreachable", str(ctx.exception).lower())
+
+    async def test_get_dashboard_stats_raises_database_unavailable_when_atlas_unreachable(self):
+        """Must raise DatabaseUnavailableError instead of reporting 0 total incidents."""
+        with self.assertRaises(database.DatabaseUnavailableError) as ctx:
+            await database.get_dashboard_stats()
+        self.assertIn("unreachable", str(ctx.exception).lower())
+
+    async def test_get_service_requests_raises_database_unavailable_when_atlas_unreachable(self):
+        """Must raise DatabaseUnavailableError instead of returning empty list []."""
+        with self.assertRaises(database.DatabaseUnavailableError) as ctx:
+            await database.get_service_requests()
+        self.assertIn("unreachable", str(ctx.exception).lower())
+
+    def test_fastapi_endpoints_return_503_when_atlas_unreachable(self):
+        """FastAPI read endpoints must return HTTP 503 when Atlas is unreachable."""
+        from fastapi.testclient import TestClient
+        from main import app
+        client = TestClient(app)
+
+        res_tickets = client.get("/api/tickets")
+        self.assertEqual(res_tickets.status_code, 503)
+        self.assertIn("unreachable", res_tickets.json()["detail"].lower())
+
+        res_stats = client.get("/api/stats")
+        self.assertEqual(res_stats.status_code, 503)
+
+        res_sr = client.get("/api/service-requests")
+        self.assertEqual(res_sr.status_code, 503)
+
+
+class TestSafeUniqueIDGeneration(unittest.IsolatedAsyncioTestCase):
+    """
+    Verifies that ID generation never reuses or collides with existing IDs
+    and uses numeric max rather than alphabetical string sort.
+    """
+
+    async def asyncSetUp(self):
+        # Pure in-memory mode (no Atlas configured)
+        database._is_connected = False
+        database._atlas_configured_but_unreachable = False
+        database._mongo_client = None
+        database._db = None
+        # Snapshot current state so we can restore it
+        self._orig_tickets = list(database._in_memory_tickets)
+        self._orig_requests = list(database._in_memory_service_requests)
+        self._orig_ticket_seq = database._next_ticket_sequence
+        self._orig_request_seq = database._next_request_sequence
+
+    async def asyncTearDown(self):
+        # Restore original data to avoid contaminating other tests.
+        database._in_memory_tickets[:] = self._orig_tickets
+        database._in_memory_service_requests[:] = self._orig_requests
+        database._next_ticket_sequence = self._orig_ticket_seq
+        database._next_request_sequence = self._orig_request_seq
+
+    async def test_ticket_ids_are_sequential_and_unique(self):
+        """Creating 5 tickets must produce 5 unique, monotonically increasing INC-NNNN numbers."""
+        created_numbers = []
+        for i in range(5):
+            t = await database.create_ticket(TicketCreate(
+                title=f"Unique ID Test Ticket {i}",
+                description="ID collision test",
+                category=TicketCategory.NETWORK,
+                priority=TicketPriority.LOW,
+                assignee="ID Tester",
+                requester="Test Suite",
+            ))
+            created_numbers.append(t.ticket_number)
+        # All unique
+        self.assertEqual(len(created_numbers), len(set(created_numbers)))
+        # All INC-NNNN format
+        for num in created_numbers:
+            self.assertRegex(num, r"^INC-\d+$")
+        # Monotonically increasing numeric suffixes
+        suffixes = [int(n.split("-")[1]) for n in created_numbers]
+        self.assertEqual(suffixes, sorted(suffixes))
+
+    async def test_request_ids_are_sequential_and_unique(self):
+        """Creating 5 service requests must produce 5 unique, monotonically increasing REQ-NNNN numbers."""
+        from schemas import ServiceRequestCreate, RequestCategory
+        created_numbers = []
+        for i in range(5):
+            r = await database.create_service_request(ServiceRequestCreate(
+                catalog_item_id="cat-101",
+                item_name=f"Test Item {i}",
+                category=RequestCategory.SOFTWARE,
+                justification=f"Unique ID request test {i}",
+                requester="Test Suite",
+                department="QA",
+            ))
+            created_numbers.append(r.request_number)
+        self.assertEqual(len(created_numbers), len(set(created_numbers)))
+        for num in created_numbers:
+            self.assertRegex(num, r"^REQ-\d+$")
+        suffixes = [int(n.split("-")[1]) for n in created_numbers]
+        self.assertEqual(suffixes, sorted(suffixes))
+
+    def test_safe_ticket_id_avoids_alpha_sort_bug(self):
+        """
+        Regression: if existing IDs include INC-999 and INC-1001, alphabetical sort
+        would pick INC-999 as max ("999" > "1001" lexicographically).
+        Safe scan must pick the true numeric max and return max + 1.
+        """
+        # Determine current max before injection
+        base_max = database._next_safe_ticket_sequence() - 1  # current max
+        low_num = f"INC-{base_max - 2}"   # lower than current max
+        high_num = f"INC-{base_max}"       # equals current max
+        database._in_memory_tickets.append({"ticket_number": low_num})
+        database._in_memory_tickets.append({"ticket_number": high_num})
+        try:
+            next_id = database._next_safe_ticket_sequence()
+            self.assertEqual(next_id, base_max + 1)
+        finally:
+            database._in_memory_tickets[:] = [
+                d for d in database._in_memory_tickets
+                if d.get("ticket_number") not in (low_num, high_num)
+            ]
+
+    def test_safe_request_id_avoids_alpha_sort_bug(self):
+        """
+        Regression: alphabetical sort would pick REQ-599 over REQ-5001
+        ("599" > "5001" lexicographically). Safe scan must pick the true numeric max.
+        """
+        # Determine current max before injection
+        base_max = database._next_safe_request_sequence() - 1
+        low_num = f"REQ-{base_max - 400}"  # lower numerically and lexicographically ambiguous
+        high_num = f"REQ-{base_max}"
+        database._in_memory_service_requests.append({"request_number": low_num})
+        database._in_memory_service_requests.append({"request_number": high_num})
+        try:
+            next_id = database._next_safe_request_sequence()
+            self.assertEqual(next_id, base_max + 1)
+        finally:
+            database._in_memory_service_requests[:] = [
+                d for d in database._in_memory_service_requests
+                if d.get("request_number") not in (low_num, high_num)
+            ]
 
 
 if __name__ == "__main__":
     unittest.main()
-

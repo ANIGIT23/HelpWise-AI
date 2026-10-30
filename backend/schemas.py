@@ -157,6 +157,40 @@ class KBAskResponse(BaseModel):
     disclaimer: str
 
 
+# ── Conversational Chat ──────────────────────────────────────────────────────
+
+class ChatMessage(BaseModel):
+    """A single turn in a conversation (role = 'user' | 'assistant')."""
+    role: str = Field(..., pattern="^(user|assistant)$", description="Message author: 'user' or 'assistant'")
+    content: str = Field(..., min_length=1, max_length=2000, description="Message text")
+
+
+class ChatRequest(BaseModel):
+    """
+    Request body for POST /api/kb/chat.
+    Sends the latest user message plus a bounded window of prior turns for context.
+    """
+    message: str = Field(..., min_length=3, max_length=1000, description="The user's current message")
+    history: List[ChatMessage] = Field(
+        default_factory=list,
+        max_length=20,
+        description="Recent conversation turns (oldest first, max 20 items)"
+    )
+
+
+class ChatResponse(BaseModel):
+    """Response for a single chat turn."""
+    message: str = Field(..., description="Assistant's reply text")
+    matched_articles: List[KBAskHit] = Field(default_factory=list)
+    generation_mode: str = Field(..., description="How the answer was produced")
+    llm_used: bool
+    vector_database: str
+    has_answer: bool = Field(..., description="True when a verified KB article was found")
+    intent: Optional[str] = Field(default="knowledge_search", description="Classified user intent")
+    action_proposed: Optional[Dict] = Field(default=None, description="Proposed action requiring confirmation")
+    action_result: Optional[Dict] = Field(default=None, description="Result of confirmed action")
+
+
 class StorageStatusResponse(BaseModel):
     """Schema describing current database connection status."""
     connected: bool
@@ -164,3 +198,172 @@ class StorageStatusResponse(BaseModel):
     database_name: str
     message: str
     instructions: Optional[str] = None
+
+
+# ── User Identity & Personas ─────────────────────────────────────────────────
+
+class UserRole(str, Enum):
+    EMPLOYEE = "Employee"
+    AGENT = "Support Agent"
+    ADMIN = "Administrator"
+
+
+class UserProfile(BaseModel):
+    username: str
+    name: str
+    email: str
+    role: UserRole
+    department: str
+    avatar: str
+
+
+# ── Service Requests & Catalogue ─────────────────────────────────────────────
+
+class RequestCategory(str, Enum):
+    SOFTWARE = "Software & Licenses"
+    ACCESS = "Access & Permissions"
+    HARDWARE = "Hardware & Equipment"
+    NETWORK = "VPN & Network"
+    OTHER = "Other IT Services"
+
+
+class RequestStatus(str, Enum):
+    SUBMITTED = "Submitted"
+    PENDING_APPROVAL = "Pending Approval"
+    APPROVED = "Approved"
+    IN_PROGRESS = "In Progress"
+    FULFILLED = "Fulfilled"
+    REJECTED = "Rejected"
+    CANCELLED = "Cancelled"
+
+
+class CatalogItem(BaseModel):
+    id: str
+    name: str
+    category: RequestCategory
+    description: str
+    requires_approval: bool = True
+    estimated_delivery: str
+    icon: str
+
+
+class ServiceRequestCreate(BaseModel):
+    catalog_item_id: str
+    item_name: str
+    category: RequestCategory
+    # Accept both field names from the frontend
+    justification: Optional[str] = Field(default=None, min_length=5, max_length=1000)
+    business_justification: Optional[str] = Field(default=None, min_length=5, max_length=1000)
+    additional_info: Optional[str] = None
+    additional_details: Optional[str] = None  # Frontend alias for additional_info
+    requester: str = Field(default="Alex Morgan")
+    requester_email: Optional[str] = None
+    department: Optional[str] = "Engineering"
+
+    def get_justification(self) -> str:
+        return (self.business_justification or self.justification or "").strip()
+
+
+class ServiceRequestStatusUpdate(BaseModel):
+    status: RequestStatus
+    notes: Optional[str] = None
+    rejection_reason: Optional[str] = None  # Frontend alias for notes
+    actor: Optional[str] = None
+
+    def get_notes(self) -> Optional[str]:
+        return self.rejection_reason or self.notes
+
+
+class ServiceRequestResponse(BaseModel):
+    id: str
+    request_number: str
+    catalog_item_id: str
+    item_name: str
+    category: str
+    justification: str
+    business_justification: Optional[str] = None
+    additional_info: Optional[str] = None
+    additional_details: Optional[str] = None
+    requester: str
+    department: str
+    status: RequestStatus
+    requires_approval: bool
+    approver: Optional[str] = None
+    approval_notes: Optional[str] = None
+    created_at: str
+    updated_at: str
+    activity_history: List[ActivityLogEntry] = Field(default_factory=list)
+
+
+
+# ── Work Timers & Ticket Timeline ────────────────────────────────────────────
+
+class WorkSession(BaseModel):
+    id: str
+    ticket_id: str
+    ticket_number: str
+    agent: str
+    start_time: str
+    stop_time: Optional[str] = None
+    duration_seconds: int = 0
+    duration_minutes: int = 0  # Pre-computed minutes for frontend convenience
+    is_active: bool = True
+    note: Optional[str] = None
+
+
+class TimerActionRequest(BaseModel):
+    agent: str = Field(..., description="Agent username or name")
+    note: Optional[str] = None
+
+
+class TicketTimerStatusResponse(BaseModel):
+    ticket_id: str
+    active_session: Optional[WorkSession] = None
+    total_duration_seconds: int = 0
+    total_duration_formatted: str = "0m"
+    total_duration_minutes: int = 0  # Pre-computed minutes for frontend
+    is_agent_active: bool = False      # True when current agent has this ticket's timer running
+    sessions_count: int = 0
+    sessions: List[WorkSession] = Field(default_factory=list)
+
+
+# ── Self-Heal Diagnostics ────────────────────────────────────────────────────
+
+class DiagnosticStepResult(BaseModel):
+    name: str
+    target: str
+    status: str  # "passed", "failed", "warning"
+    latency_ms: Optional[float] = None
+    details: str
+    remediation: Optional[str] = None
+
+
+class DiagnosticReport(BaseModel):
+    workflow: str  # "network", "system", "disk"
+    overall_status: str
+    executed_at: str
+    checks_run: int
+    steps: List[DiagnosticStepResult]
+    escalation_recommended: bool
+    escalation_reason: Optional[str] = None
+
+
+# ── KB Article Management ────────────────────────────────────────────────────
+
+class KBArticleCreate(BaseModel):
+    title: str = Field(..., min_length=5, max_length=200)
+    category: str
+    read_time: str = "3 min"
+    excerpt: str = Field(..., min_length=10, max_length=300)
+    content: str = Field(..., min_length=20)
+    tags: List[str] = Field(default_factory=list)
+
+
+class KBArticleUpdate(BaseModel):
+    title: Optional[str] = None
+    category: Optional[str] = None
+    read_time: Optional[str] = None
+    excerpt: Optional[str] = None
+    content: Optional[str] = None
+    tags: Optional[List[str]] = None
+

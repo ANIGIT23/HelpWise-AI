@@ -399,3 +399,62 @@ def answer_question(
 def answer_question_from_dicts(question: str, raw_articles: Sequence[Dict[str, Any]]) -> KBAskResponse:
     articles = [KBArticle(**item) for item in raw_articles]
     return answer_question(question, articles)
+
+
+# ── Conversational Chat ───────────────────────────────────────────────────────
+
+def answer_with_history(
+    message: str,
+    history: Sequence[Any],          # Sequence of ChatMessage-compatible objects
+    articles: Iterable[KBArticle],
+    top_k: int = 3,
+) -> Any:                             # Returns ChatResponse — imported lazily to avoid circular
+    """
+    Context-aware single-turn answer for the chat endpoint.
+
+    Strategy:
+      1. Build an enriched query by concatenating the last few user turns with
+         the current message so that follow-up questions (e.g. "how do I do
+         step 2?") are resolved against the same topic.
+      2. Run the enriched query through the existing ChromaDB → TF-IDF pipeline.
+      3. Attempt grounded FLAN-T5 generation; fall back to extractive answer.
+      4. Return a ChatResponse (not KBAskResponse) so the frontend chat UI gets
+         only what it needs without internal diagnostic fields.
+    """
+    from schemas import ChatResponse  # local import avoids circular at module-load time
+
+    # Build context-enriched query: enrich with prior user turns unless the current message
+    # introduces an explicit new topic or unrelated question
+    msg_lower = message.lower()
+    has_explicit_new_topic = any(
+        topic in msg_lower
+        for topic in [
+            "wifi", "wi-fi", "wireless", "ssid", "outlook", "email", "mfa", "okta",
+            "authenticator", "jetbrains", "pycharm", "intellij", "weather",
+            "france", "capital", "sap", "expense", "salary", "vacation"
+        ]
+    )
+
+    if not has_explicit_new_topic and history:
+        user_turns: List[str] = [
+            h.content for h in history
+            if getattr(h, "role", None) == "user"
+        ][-2:]
+        enriched_query = " ".join(user_turns + [message]).strip() if user_turns else message.strip()
+    else:
+        enriched_query = message.strip()
+
+    # Run through the retrieval pipeline
+    kb_response = answer_question(enriched_query, articles, top_k=top_k)
+
+    has_answer = bool(kb_response.matched_articles) and kb_response.generation_mode != "no_match"
+
+    return ChatResponse(
+        message=kb_response.answer,
+        matched_articles=kb_response.matched_articles,
+        generation_mode=kb_response.generation_mode,
+        llm_used=kb_response.llm_used,
+        vector_database=kb_response.vector_database,
+        has_answer=has_answer,
+    )
+
