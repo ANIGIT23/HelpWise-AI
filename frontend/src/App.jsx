@@ -1752,15 +1752,25 @@ function App() {
                                     </button>
                                   )}
 
-                                  {/* Employee cancel action */}
+                                  {/* Employee cancel action and quick-switch hint for demo */}
                                   {currentUser.role === 'employee' && (req.status === 'Submitted' || req.status === 'Pending Approval') && (
-                                    <button
-                                      className="btn-secondary"
-                                      style={{ padding: '0.25rem 0.5rem', fontSize: '0.72rem' }}
-                                      onClick={() => handleUpdateServiceRequestStatus(req.id, 'Cancelled', 'Cancelled by requester')}
-                                    >
-                                      Cancel
-                                    </button>
+                                    <>
+                                      <button
+                                        className="btn-secondary"
+                                        style={{ padding: '0.25rem 0.5rem', fontSize: '0.72rem' }}
+                                        onClick={() => handleUpdateServiceRequestStatus(req.id, 'Cancelled', 'Cancelled by requester')}
+                                      >
+                                        Cancel
+                                      </button>
+                                      <button
+                                        className="btn-secondary"
+                                        style={{ padding: '0.25rem 0.5rem', fontSize: '0.72rem', color: '#0284c7', borderColor: '#bae6fd', backgroundColor: '#f0f9ff' }}
+                                        onClick={() => setCurrentUser(PERSONAS[1])}
+                                        title="Switch to Sarah Chen (Support Agent) to approve/reject this request"
+                                      >
+                                        Switch to Agent to Approve
+                                      </button>
+                                    </>
                                   )}
                                 </div>
                               </td>
