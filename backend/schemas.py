@@ -170,7 +170,7 @@ class ChatRequest(BaseModel):
     Request body for POST /api/kb/chat.
     Sends the latest user message plus a bounded window of prior turns for context.
     """
-    message: str = Field(..., min_length=3, max_length=1000, description="The user's current message")
+    message: str = Field(..., min_length=1, max_length=1000, description="The user's current message")
     history: List[ChatMessage] = Field(
         default_factory=list,
         max_length=20,

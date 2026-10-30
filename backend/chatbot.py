@@ -46,13 +46,18 @@ _GRATITUDE_PATTERNS = [
     r"^that\s*(helped|worked|fixed\s*it)[\s.!]*$",
 ]
 
+_ACKNOWLEDGMENT_PATTERNS = [
+    r"^(ok|okay|k|kk|alright|all\s*right|got\s*it|cool|fine|understood|sounds\s*good|noted|sure|done|nice)[\s.!]*$",
+    r"^(okay\s*thanks?|ok\s*thanks?|ok\s*got\s*it|okay\s*cool|ok\s*sure|got\s*it\s*thanks?)[\s.!]*$",
+]
+
 def _is_affirmative_confirmation(msg: str) -> bool:
     m = msg.strip().lower()
     if any(q in m for q in ["status", "is my", "if my", "are my", "can you check", "open an incident", "create a ticket"]):
         return False
-    if re.search(r"^\s*(yes\b|confirm\b|sure\b|proceed\b|go\s*ahead\b|please\s*(confirm|create|submit|proceed))", m):
+    if re.search(r"^\s*(yes\b|confirm\b|sure\b|proceed\b|go\s*ahead\b|ok\b|okay\b|please\s*(confirm|create|submit|proceed))", m):
         return True
-    if re.search(r"\b(confirm\s*(it|this|creation|submission|request|please)?|yes,?\s*(confirm|please|proceed)?)\b", m):
+    if re.search(r"\b(confirm\s*(it|this|creation|submission|request|please)?|yes,?\s*(confirm|please|proceed)?|ok,?\s*(confirm|please|proceed)?)\b", m):
         return True
     return False
 
@@ -329,8 +334,14 @@ def _classify_intent(message: str, history: List[ChatMessage]) -> str:
             return "confirm_ticket"
         elif pending == "service_request":
             return "confirm_service_request"
+        elif any(re.search(pat, msg) for pat in _ACKNOWLEDGMENT_PATTERNS):
+            return "acknowledgment"
         else:
             return "confirm_without_proposal"
+
+    # 3b. Conversational Acknowledgments (e.g. "ok", "got it", "cool", "alright")
+    if any(re.search(pat, msg) for pat in _ACKNOWLEDGMENT_PATTERNS):
+        return "acknowledgment"
 
     # 4. Context Follow-up: Solution Failed / Still Not Working
     if any(re.search(pat, msg) for pat in _FAILED_ATTEMPT_PATTERNS):
@@ -419,6 +430,25 @@ async def handle_conversational_turn(
             vector_database="none",
             has_answer=True,
             intent="gratitude",
+        )
+
+    # ── 2b. Acknowledgment (OK / Got it / Understood / Alright) ──────────────────
+    if intent == "acknowledgment":
+        ack_text = (
+            f"Understood, {user_name}! 👍\n\n"
+            "Is there anything else I can help you with today?\n"
+            "• **IT Troubleshooting**: Ask about VPN, Wi-Fi, Outlook, or MFA issues.\n"
+            "• **Software & Access**: Request tools like Docker Desktop, VS Code, or JetBrains.\n"
+            "• **Incident Management**: Describe an issue to open an IT ticket, or check your ticket statuses."
+        )
+        return ChatResponse(
+            message=ack_text,
+            matched_articles=[],
+            generation_mode="acknowledgment",
+            llm_used=False,
+            vector_database="none",
+            has_answer=True,
+            intent="acknowledgment",
         )
 
     # ── 3. Confirmation Without Proposal / Duplicate Confirmation Guardrail ────
@@ -1122,5 +1152,62 @@ async def handle_conversational_turn(
             "Let me know if this fixes it, or if you'd like me to run network diagnostics or log a ticket for IT Support!"
         )
         rag_response.message = friendly_answer
+
+    # When no matching article or relevant answer is found in the Knowledge Base:
+    # Proactively offer to open an Incident Ticket for the user!
+    if not rag_response.has_answer:
+        clean_text = re.sub(r"[^\w\s-]", " ", message).strip()
+        clean_words = clean_text.split()
+        if len(clean_words) >= 1:
+            raw_title = " ".join(clean_words[:8])
+            title = f"IT Support Request: {raw_title}"
+        else:
+            title = "IT Support Incident logged via Chat"
+
+        if len(title) > 80:
+            title = title[:77] + "..."
+
+        category = TicketCategory.SOFTWARE
+        desc = (
+            f"User inquiry via HelpWise AI Assistant: \"{message}\"\n\n"
+            f"Result: No matching standard Knowledge Base article was found.\n"
+            f"Requester: {user_name} ({user_role})"
+        )
+
+        proposal = {
+            "type": "create_incident",
+            "title": title,
+            "category": category.value,
+            "priority": TicketPriority.MEDIUM.value,
+            "description": desc,
+            "requester": user_name,
+            "details": {
+                "title": title,
+                "category": category.value,
+                "priority": TicketPriority.MEDIUM.value,
+                "description": desc,
+                "requester": user_name,
+            },
+        }
+
+        offer_text = (
+            f"I could not find a matching Knowledge Base article for **\"{message}\"**.\n\n"
+            "Would you like me to open an **Incident Ticket** so our IT Support team can investigate this for you?\n\n"
+            f"• **Title**: {title}\n"
+            f"• **Category**: {category.value}\n"
+            f"• **Priority**: Medium\n\n"
+            "Click **Confirm & Submit Incident** below to submit it immediately, or let me know what you would like to do!"
+        )
+
+        return ChatResponse(
+            message=offer_text,
+            matched_articles=[],
+            generation_mode="incident_proposal",
+            llm_used=False,
+            vector_database="none",
+            has_answer=False,
+            intent="incident_intake",
+            action_proposed=proposal,
+        )
 
     return rag_response

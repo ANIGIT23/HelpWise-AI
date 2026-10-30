@@ -159,13 +159,20 @@ class TestITSMFeatures(unittest.TestCase):
         self.assertFalse(f_res.json()["found"])
 
         # Sync ticket (Simulation mode)
-        sync_res = self.client.post("/api/servicenow/sync/INC-1001")
-        self.assertEqual(sync_res.status_code, 200)
-        sync_data = sync_res.json()
-        self.assertTrue(sync_data["synced"])
-        self.assertIn("sys_id", sync_data)
-        self.assertTrue(sync_data["number"].startswith("INC"))
-        self.assertIn("payload", sync_data)
+        with patch("servicenow._get_config") as mock_cfg:
+            mock_cfg.return_value = {
+                "instance_url": "https://dev-instance.service-now.com",
+                "user": "admin",
+                "password": "",
+                "configured": False,
+            }
+            sync_res = self.client.post("/api/servicenow/sync/INC-1001")
+            self.assertEqual(sync_res.status_code, 200)
+            sync_data = sync_res.json()
+            self.assertTrue(sync_data["synced"])
+            self.assertIn("sys_id", sync_data)
+            self.assertTrue(sync_data["number"].startswith("INC"))
+            self.assertIn("payload", sync_data)
 
     def test_servicenow_live_create_mocked(self):
         """Validates real Table API live incident creation with mocked HTTP response."""
@@ -651,13 +658,34 @@ class TestITSMFeatures(unittest.TestCase):
         self.assertTrue(d1["has_answer"])
         self.assertEqual(d1["matched_articles"][0]["id"], "kb-105")
 
-        # 2. Unrelated query
+        # 2. Unrelated query: offers incident creation proposal
         r2 = self.client.post("/api/kb/chat", json={"message": "What is the capital of France?", "history": []})
         self.assertEqual(r2.status_code, 200)
         d2 = r2.json()
         self.assertFalse(d2["has_answer"])
-        self.assertEqual(d2["generation_mode"], "no_match")
+        self.assertEqual(d2["generation_mode"], "incident_proposal")
+        self.assertEqual(d2["action_proposed"]["type"], "create_incident")
         self.assertEqual(d2["matched_articles"], [])
+
+    def test_chat_short_acknowledgments_and_single_char(self):
+        """Verifies short messages ('ok', 'k', 'alright') return 200 acknowledgment without 422 errors."""
+        res_ok = self.client.post("/api/kb/chat", json={"message": "OK", "history": []})
+        self.assertEqual(res_ok.status_code, 200)
+        data_ok = res_ok.json()
+        self.assertEqual(data_ok["intent"], "acknowledgment")
+        self.assertIn("anything else", data_ok["message"].lower())
+
+        # Test single character input
+        res_k = self.client.post("/api/kb/chat", json={"message": "k", "history": []})
+        self.assertEqual(res_k.status_code, 200)
+        self.assertEqual(res_k.json()["intent"], "acknowledgment")
+
+        # Test unrelated keyword query proposing incident
+        res_irr = self.client.post("/api/kb/chat", json={"message": "ASSIGNEE", "history": []})
+        self.assertEqual(res_irr.status_code, 200)
+        data_irr = res_irr.json()
+        self.assertEqual(data_irr["action_proposed"]["type"], "create_incident")
+        self.assertIn("ASSIGNEE", data_irr["action_proposed"]["details"]["description"])
 
 
 if __name__ == "__main__":

@@ -646,7 +646,7 @@ function App() {
   // ── All-Rounder Chatbot Handler ────────────────────────────────────────────
   const handleChatSend = async (overrideMessage) => {
     const text = (overrideMessage !== undefined ? overrideMessage : chatInput).trim();
-    if (!text || text.length < 2 || chatLoading) return;
+    if (!text || chatLoading) return;
 
     // Append user message immediately
     const userMsg = { role: 'user', content: text };
@@ -668,7 +668,17 @@ function App() {
       });
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.detail || `Server error ${res.status}`);
+        let errorMsg = `Server error ${res.status}`;
+        if (typeof errData.detail === 'string') {
+          errorMsg = errData.detail;
+        } else if (Array.isArray(errData.detail)) {
+          errorMsg = errData.detail.map((d) => d.msg || (typeof d === 'object' ? JSON.stringify(d) : String(d))).join('; ');
+        } else if (errData.detail && typeof errData.detail === 'object') {
+          errorMsg = JSON.stringify(errData.detail);
+        } else if (errData.message) {
+          errorMsg = errData.message;
+        }
+        throw new Error(errorMsg);
       }
       const data = await res.json();
       const assistantMsg = {
@@ -2092,12 +2102,50 @@ function App() {
                                 </>
                               )}
                             </div>
+                            <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+                              <button
+                                className="btn-primary"
+                                style={{ fontSize: '0.75rem', padding: '0.3rem 0.7rem' }}
+                                onClick={() => handleChatSend('Yes, confirm please')}
+                              >
+                                {msg.action_proposed.type === 'create_incident' || msg.action_proposed.type === 'create_ticket'
+                                  ? '✓ Confirm & Submit Incident'
+                                  : '✓ Confirm & Submit Now'}
+                              </button>
+                              {(msg.action_proposed.type === 'create_incident' || msg.action_proposed.type === 'create_ticket') && (
+                                <button
+                                  className="btn-secondary"
+                                  style={{ fontSize: '0.75rem', padding: '0.3rem 0.6rem', color: '#1e40af', borderColor: '#bfdbfe' }}
+                                  onClick={() => {
+                                    setCreateTitle(msg.action_proposed.details?.title || '');
+                                    setCreateCategory(msg.action_proposed.details?.category || 'Software');
+                                    setCreatePriority(msg.action_proposed.details?.priority || 'Medium');
+                                    setCreateDescription(msg.action_proposed.details?.description || '');
+                                    setShowCreateModal(true);
+                                  }}
+                                  title="Open the full ticket form to customize"
+                                >
+                                  ✏️ Edit in Form
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Direct Option to Create Incident Ticket when no KB article matches */}
+                        {!msg.has_answer && !msg.action_proposed && msg.role === 'assistant' && (
+                          <div style={{ marginTop: '0.35rem' }}>
                             <button
-                              className="btn-primary"
-                              style={{ fontSize: '0.75rem', padding: '0.3rem 0.7rem' }}
-                              onClick={() => handleChatSend('Yes, confirm please')}
+                              className="btn-secondary"
+                              style={{ fontSize: '0.72rem', padding: '0.25rem 0.6rem', color: '#0284c7', borderColor: '#bae6fd', backgroundColor: '#f0f9ff' }}
+                              onClick={() => {
+                                const lastUser = chatMessages.slice(0, idx).reverse().find((m) => m.role === 'user')?.content || '';
+                                setCreateTitle(lastUser ? `Assistance with: ${lastUser.slice(0, 50)}` : 'IT Support Incident');
+                                setCreateDescription(lastUser ? `User question: ${lastUser}` : '');
+                                setShowCreateModal(true);
+                              }}
                             >
-                              ✓ Confirm & Submit Now
+                              📋 Create Incident Ticket
                             </button>
                           </div>
                         )}
